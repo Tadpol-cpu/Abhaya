@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:intl/intl.dart'; 
+import 'package:permission_handler/permission_handler.dart';
 
 class CommunityScreen extends StatefulWidget {
   const CommunityScreen({super.key});
@@ -12,123 +15,182 @@ class CommunityScreen extends StatefulWidget {
 class _CommunityScreenState extends State<CommunityScreen> {
   final TextEditingController _msgController = TextEditingController();
   final user = FirebaseAuth.instance.currentUser;
-  String _displayName = "Loading...";
+  
+  String _displayName = "Driver"; 
+  String _currentDestination = "Fetching history..."; 
+  late stt.SpeechToText _speech;
+  bool _isListening = false;
 
   @override
   void initState() {
     super.initState();
-    _fetchNameFromSignup();
+    _speech = stt.SpeechToText();
+    _fetchUserData(); 
   }
 
-  // 1. FETCH THE 'name' FIELD FROM SIGNUP
-  Future<void> _fetchNameFromSignup() async {
-    if (user != null) {
-      final userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user!.uid)
-          .get();
-      
+  // 1. DATA FETCH: Pulls latest history for the SOS
+  Future<void> _fetchUserData() async {
+    if (user == null) return;
+    try {
+      final userDoc = await FirebaseFirestore.instance.collection('users').doc(user!.uid).get();
       if (userDoc.exists && mounted) {
-        setState(() {
-          // This matches the 'name' field saved in your Signup Screen
-          _displayName = userDoc.data()?['name'] ?? "Driver";
-        });
+        setState(() { _displayName = userDoc.data()?['name'] ?? "Driver"; });
       }
+
+      final lastTrip = await FirebaseFirestore.instance
+          .collection('users').doc(user!.uid).collection('past_trips')
+          .orderBy('timestamp', descending: true).limit(1).get();
+
+      if (lastTrip.docs.isNotEmpty && mounted) {
+        var data = lastTrip.docs.first.data();
+        setState(() { 
+          _currentDestination = data['destination'] ?? data['to'] ?? "Recent Trip"; 
+        });
+      } else {
+        if (mounted) setState(() => _currentDestination = "No Destination History");
+      }
+    } catch (e) {
+      if (mounted) setState(() => _currentDestination = "Error Loading History");
     }
   }
 
-  // 2. SEND MESSAGE/SOS LOGIC
-  void _sendMessage({String? text, bool isSOS = false}) async {
-    if (!isSOS && _msgController.text.trim().isEmpty) return;
+  // 2. PERFECT AUDIO: Handled with Permissions and Voice Engine
+  void _toggleListening() async {
+    if (!_isListening) {
+      var status = await Permission.microphone.request();
+      if (status.isGranted) {
+        bool available = await _speech.initialize(
+          onError: (val) => setState(() => _isListening = false),
+        );
+
+        if (available) {
+          setState(() => _isListening = true);
+          _speech.listen(
+            onResult: (val) {
+              String words = val.recognizedWords.toLowerCase();
+              if (words.contains("help") || words.contains("sos")) {
+                _triggerSOS(isVoice: true); 
+              }
+            },
+            listenFor: const Duration(seconds: 30),
+            pauseFor: const Duration(seconds: 5),
+            listenMode: stt.ListenMode.confirmation,
+          );
+        }
+      }
+    } else {
+      _stopListening();
+    }
+  }
+
+  void _stopListening() {
+    _speech.stop();
+    setState(() => _isListening = false);
+  }
+
+  // 3. SOS TRIGGER
+  void _triggerSOS({required bool isVoice}) async {
+    if (isVoice) _stopListening(); 
+    await _fetchUserData(); 
+    
+    String alertType = isVoice ? "🚨 VOICE ACTIVATED SOS! 🚨" : "🚨 MANUAL SOS ALERT! 🚨";
+    _sendMessage(customText: "$alertType\nHeading to: $_currentDestination", isSOS: true);
+  }
+
+  // 4. MESSAGE SENDING
+  void _sendMessage({String? customText, bool isSOS = false}) async {
+    String msgText = customText ?? _msgController.text.trim();
+    if (msgText.isEmpty) return;
 
     await FirebaseFirestore.instance.collection('community_messages').add({
       'senderId': user?.uid,
-      'senderName': _displayName, // Broadcasts the User's Name
-      'text': isSOS ? "🚨 SOS! EMERGENCY! 🚨" : _msgController.text,
+      'senderName': _displayName, 
+      'text': msgText,
       'isSOS': isSOS,
       'timestamp': FieldValue.serverTimestamp(),
     });
-
     _msgController.clear();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFFDE8E8), // Matches your app theme
+      backgroundColor: const Color(0xFFFDE8E8),
       appBar: AppBar(
-        title: const Text("Drivers Community", style: TextStyle(fontWeight: FontWeight.bold)),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
-        elevation: 1,
+        title: const Text("Drivers Community"),
+        actions: [
+          IconButton(
+            icon: Icon(_isListening ? Icons.mic : Icons.mic_none, 
+                 color: _isListening ? Colors.red : Colors.black),
+            onPressed: _toggleListening,
+          )
+        ],
       ),
       body: Column(
         children: [
-          // SOS BUTTON SECTION
+          if (_isListening)
+            Container(
+              width: double.infinity,
+              color: Colors.red,
+              padding: const EdgeInsets.all(8),
+              child: const Text("LISTENING FOR 'HELP' OR 'SOS'...", 
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
+            ),
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red,
-                minimumSize: const Size(double.infinity, 60),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-              ),
-              onPressed: () => _sendMessage(isSOS: true),
-              icon: const Icon(Icons.emergency_share, color: Colors.white),
-              label: const Text("BROADCAST SOS ALERT", 
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.red, minimumSize: const Size(double.infinity, 55)),
+              onPressed: () => _triggerSOS(isVoice: false), 
+              icon: const Icon(Icons.warning, color: Colors.white),
+              label: const Text("SEND SOS", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
             ),
           ),
-
-          // CHAT STREAM
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('community_messages')
-                  .orderBy('timestamp', descending: true)
-                  .snapshots(),
+              stream: FirebaseFirestore.instance.collection('community_messages').orderBy('timestamp', descending: true).snapshots(),
               builder: (context, snapshot) {
                 if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-                
                 return ListView.builder(
                   reverse: true,
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
                   itemCount: snapshot.data!.docs.length,
                   itemBuilder: (context, index) {
                     var data = snapshot.data!.docs[index].data() as Map<String, dynamic>;
                     bool isMe = data['senderId'] == user?.uid;
                     bool isSOS = data['isSOS'] ?? false;
 
+                    // Date and Time Formatting
+                    String formattedDateTime = "";
+                    if (data['timestamp'] != null) {
+                      DateTime dt = (data['timestamp'] as Timestamp).toDate();
+                      formattedDateTime = DateFormat('MMM d, hh:mm a').format(dt);
+                    }
+
                     return Align(
                       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
                       child: Container(
-                        margin: const EdgeInsets.symmetric(vertical: 5),
+                        margin: const EdgeInsets.symmetric(vertical: 5, horizontal: 10),
                         padding: const EdgeInsets.all(12),
-                        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
                         decoration: BoxDecoration(
                           color: isSOS ? Colors.red : (isMe ? Colors.blue[100] : Colors.white),
-                          borderRadius: BorderRadius.only(
-                            topLeft: const Radius.circular(15),
-                            topRight: const Radius.circular(15),
-                            bottomLeft: isMe ? const Radius.circular(15) : Radius.zero,
-                            bottomRight: isMe ? Radius.zero : const Radius.circular(15),
-                          ),
-                          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 5)],
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 2)],
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            // DISPLAYS THE NAME FROM SIGNUP
-                            Text(data['senderName'], 
+                            Text(data['senderName'], style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 10)),
+                            const SizedBox(height: 4),
+                            Text(data['text'], style: TextStyle(color: isSOS ? Colors.white : Colors.black)),
+                            const SizedBox(height: 6),
+                            Text(
+                              formattedDateTime,
                               style: TextStyle(
-                                fontWeight: FontWeight.bold, 
-                                fontSize: 11, 
-                                color: isSOS ? Colors.white70 : Colors.blueGrey)),
-                            const SizedBox(height: 3),
-                            Text(data['text'], 
-                              style: TextStyle(
-                                color: isSOS ? Colors.white : Colors.black,
-                                fontWeight: isSOS ? FontWeight.bold : FontWeight.normal)),
+                                fontSize: 8,
+                                color: isSOS ? Colors.white70 : Colors.black45,
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -138,39 +200,13 @@ class _CommunityScreenState extends State<CommunityScreen> {
               },
             ),
           ),
-
-          // MESSAGE INPUT BOX
-          Container(
-            padding: const EdgeInsets.all(12),
-            color: Colors.white,
-            child: SafeArea(
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _msgController,
-                      decoration: InputDecoration(
-                        hintText: "Chat with active drivers...",
-                        filled: true,
-                        fillColor: Colors.grey[100],
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(30),
-                          borderSide: BorderSide.none,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  CircleAvatar(
-                    backgroundColor: Colors.red,
-                    child: IconButton(
-                      icon: const Icon(Icons.send, color: Colors.white, size: 20),
-                      onPressed: () => _sendMessage(),
-                    ),
-                  ),
-                ],
-              ),
+          Padding(
+            padding: const EdgeInsets.all(12.0),
+            child: Row(
+              children: [
+                Expanded(child: TextField(controller: _msgController, decoration: const InputDecoration(hintText: "Type message..."))),
+                IconButton(icon: const Icon(Icons.send, color: Colors.blue), onPressed: () => _sendMessage()),
+              ],
             ),
           ),
         ],

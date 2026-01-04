@@ -19,11 +19,12 @@ android {
         jvmTarget = JavaVersion.VERSION_17.toString()
     }
 
-    defaultConfig {
+defaultConfig {
         applicationId = "com.example.women_safety"
         
-        // Use 21 manually to support Firebase, Google Maps, and OSRM
+        // CHANGED: Manually set to 21 to support Speech-to-Text and Firebase
         minSdk = flutter.minSdkVersion 
+        
         targetSdk = 34
         
         versionCode = flutter.versionCode
