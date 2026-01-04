@@ -1,169 +1,97 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import '../theme/colors.dart';
-import 'login_screen.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:math';
+import 'ongoing_trip_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
-  // Function to handle logout
-  Future<void> _handleLogout(BuildContext context) async {
-    try {
-      await FirebaseAuth.instance.signOut();
-      if (context.mounted) {
-        // Redirect to Login Page and clear the navigation stack
-        Navigator.pushAndRemoveUntil(
-          context,
-          MaterialPageRoute(builder: (_) => const LoginScreen()),
-          (route) => false,
-        );
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Error logging out: $e")),
-      );
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
+    final String uid = FirebaseAuth.instance.currentUser?.uid ?? "";
+
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        automaticallyImplyLeading: false, // Removes the default back button
-        title: const Text(
-          "ABHAYA",
-          style: TextStyle(
-            color: AppColors.primaryRed,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
+        title: const Text("ABHAYA", style: TextStyle(fontWeight: FontWeight.bold)),
         actions: [
-          // LOGOUT BUTTON
           IconButton(
-            icon: const Icon(Icons.logout, color: Colors.black54),
-            onPressed: () => _handleLogout(context),
-            tooltip: "Logout",
+            icon: const Icon(Icons.logout),
+            onPressed: () async {
+              // 1. Sign out from Firebase
+              await FirebaseAuth.instance.signOut(); 
+              // 2. THE FIX: Clear the navigation stack so the Auth Gate works
+              if (context.mounted) {
+                Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
+              }
+            },
           ),
         ],
       ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            // 1. Start New Trip Button (Gradient)
-            _buildNewTripButton(),
-
-            // 2. Tab Switcher (History / Community)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 10),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  _buildTab(Icons.history, "History", true),
-                  _buildTab(Icons.people_outline, "Community", false),
-                ],
-              ),
+      body: Column(
+        children: [
+          _buildNewTripButton(context),
+          const Padding(
+            padding: EdgeInsets.all(16.0),
+            child: Align(alignment: Alignment.centerLeft, child: Text("Trip History", style: TextStyle(fontWeight: FontWeight.bold))),
+          ),
+          Expanded(
+            child: StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance
+                  .collection('users').doc(uid).collection('past_trips')
+                  .orderBy('timestamp', descending: true).snapshots(),
+              builder: (context, snapshot) {
+                if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+                return ListView(
+                  children: snapshot.data!.docs.map((doc) => _tripHistoryCard(doc.data() as Map<String, dynamic>)).toList(),
+                );
+              },
             ),
-
-            const Padding(
-              padding: EdgeInsets.only(left: 20, top: 10, bottom: 10),
-              child: Align(
-                alignment: Alignment.centerLeft, 
-                child: Text(
-                  "Recent Trips", 
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)
-                )
-              ),
-            ),
-
-            // 3. Trip Cards List
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                children: [
-                  _tripHistoryCard("TRP001", "T Nagar", "Velachery", "Low Risk", Colors.green),
-                  _tripHistoryCard("TRP002", "Anna Nagar", "OMR", "Medium", Colors.orange),
-                  _tripHistoryCard("TRP003", "Mylapore", "Tambaram", "High Risk", Colors.red),
-                ],
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildNewTripButton() {
-    return Container(
-      margin: const EdgeInsets.all(16),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(colors: [Color(0xFFB06AB3), Color(0xFF4568DC)]),
-        borderRadius: BorderRadius.circular(40),
-      ),
-      child: InkWell(
-        onTap: () {
-          // Future navigation to Risk Assessment Screen
-        },
-        child: Row(
+  Widget _buildNewTripButton(BuildContext context) {
+    return InkWell(
+      onTap: () {
+        // RANDOM RISK SCORE GENERATOR
+        double randomRisk = (Random().nextDouble() * 9) + 1;
+        Navigator.push(
+          context, 
+          MaterialPageRoute(builder: (_) => OngoingTripScreen(riskScore: double.parse(randomRisk.toStringAsFixed(1))))
+        );
+      },
+      child: Container(
+        margin: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(colors: [Colors.purple, Colors.blue]),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: const Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: const [
-            Text("Start New Trip", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-            Icon(Icons.arrow_forward_ios, color: Colors.white, size: 20),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTab(IconData icon, String label, bool isActive) {
-    return Column(
-      children: [
-        Icon(icon, color: isActive ? Colors.purple : Colors.grey),
-        Text(label, style: TextStyle(color: isActive ? Colors.purple : Colors.grey, fontSize: 12)),
-      ],
-    );
-  }
-
-  Widget _tripHistoryCard(String id, String from, String to, String risk, Color riskColor) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text("Trip ID: $id", style: const TextStyle(fontWeight: FontWeight.bold)),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(color: riskColor.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
-                  child: Text(risk, style: TextStyle(color: riskColor, fontWeight: FontWeight.bold, fontSize: 11)),
-                )
-              ],
-            ),
-            const Divider(height: 20),
-            _locationRow(Icons.circle_outlined, "From", from),
-            const SizedBox(height: 8),
-            _locationRow(Icons.location_on, "To", to),
+            Text("Start New Trip", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
+            Icon(Icons.arrow_forward_ios, color: Colors.white),
           ],
         ),
       ),
     );
   }
 
-  Widget _locationRow(IconData icon, String label, String value) {
-    return Row(
-      children: [
-        Icon(icon, size: 14, color: Colors.grey),
-        const SizedBox(width: 8),
-        Text("$label: ", style: const TextStyle(color: Colors.grey, fontSize: 13)),
-        Text(value, style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13)),
-      ],
+  Widget _tripHistoryCard(Map<String, dynamic> data) {
+    bool blackmarked = data['isBlackmarked'] ?? false;
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: ListTile(
+        leading: Icon(blackmarked ? Icons.report_problem : Icons.person, color: blackmarked ? Colors.red : Colors.blue),
+        title: Text("Customer: ${data['customerName']}"),
+        subtitle: Text("From: ${data['from']}\nTo: ${data['to']}"),
+        trailing: Text(data['riskLevel'] ?? 'Low', style: TextStyle(color: data['riskLevel'] == "High Risk" ? Colors.red : Colors.green, fontWeight: FontWeight.bold)),
+      ),
     );
   }
 }
